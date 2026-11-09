@@ -23,13 +23,68 @@ A dendritic spiking neural network (DH-SNN) that reads seven PSG signals the way
 | Parameters | 114 K |
 | Activation sparsity | ≈ 88 % (firing rate 12.1 %) |
 
+## Code
+
+The main model of the poster (run `cinc_mm_stf_s0`) as a small PyTorch package, with the trained weights.
+
+```
+snn_apnea/model.py     network: per-signal encoder -> peripheral DH-LIF streams -> central STF layer -> hold-update readout
+snn_apnea/data.py      CinC 2018 preprocessing (ECG beat series + SaO2 / airflow / belts at 4 Hz), labels, 7-min windows
+snn_apnea/train.py     training and evaluation
+splits/cinc2018_subject_split.json   subject-disjoint split, 694 / 99 / 201 subjects (AHI-stratified, seed 0)
+checkpoints/cinc_mm_stf_s0.pt        trained poster model (114,135 parameters, 0.5 MB)
+tests/check.py         quick CPU self-check
+```
+
+**Setup**
+
+```bash
+pip install -r requirements.txt
+python tests/check.py                       # prints "ok"
+```
+
+**1. Preprocess** the [PhysioNet/CinC Challenge 2018](https://physionet.org/content/challenge-2018/1.0.0/) training set (994 records, one folder per record):
+
+```bash
+python -m snn_apnea.data --cinc-dir /path/to/challenge-2018/training --out data/cache --workers 16
+```
+
+**2. Evaluate the released checkpoint** on the 201 test subjects:
+
+```bash
+python -m snn_apnea.train --cache data/cache --eval checkpoints/cinc_mm_stf_s0.pt
+python -m snn_apnea.train --cache data/cache --eval checkpoints/cinc_mm_stf_s0.pt --missing sao2   # 6.5: SaO2 sensor absent
+```
+
+**3. Train from scratch** (12 epochs, ~10 h and ~15 GB on one RTX A6000):
+
+```bash
+python -m snn_apnea.train --cache data/cache --out runs/main
+```
+
+GPU training is not bit-deterministic, so a new run lands close to, not exactly on, the released numbers.
+
+**Inputs and window.** 7 signals at 4 Hz in the order `rri, ramp, edr, sao2, airflow, abd, chest`, each normalised per record. One sample is a 7-minute window: 4 past minutes, the scored minute, 2 later minutes for the hold-update step. A minute is labelled apnea when apnea/hypopnea events cover at least 5 s of it (RERA excluded).
+
+**Released checkpoint on the test set** (93,266 minutes), produced by this code:
+
+| | Acc | F1 | AUROC | AUPRC | Sen | Spe |
+|---|---|---|---|---|---|---|
+| all 7 signals, threshold 0.5 | 92.2 | 0.820 | 0.970 | 0.908 | 85.0 | 94.1 |
+| SaO2 absent (`--missing sao2`), threshold 0.5 | 87.0 | 0.711 | 0.918 | 0.795 | 75.8 | 90.0 |
+
+The poster's 6.5 sensitivity (75.4 %) silenced the SaO2 stream at the central input; `--missing` zeroes it at the encoder instead (same AUROC 0.918, sensitivity 75.8 %).
+
+This package is a cleaned extract of the lab's research code. With the same seed it builds identical initial weights, and with the trained weights it gives the same outputs as the original model (fp32 bit-identical; bf16 test predictions within 6e-5).
+Not included: the SaO2-frozen fine-tune of 6.5, the per-event-type reliance analysis of 6.2, and the figure scripts.
+
 ## 1–3. Introduction, dataset, setup
 
 ![intro](figures/01_introduction.png)
 
 - **Data:** PhysioNet / CinC Challenge 2018 (MGH), 994 subjects, 459,368 one-minute units, apnea prevalence 20.9 %.
 - **Signals (7):** Airflow, Chest, Abdomen, SaO2 (pulse oximetry), and three ECG-derived series (RRI, R-amplitude, QRS-area EDR).
-- **Split:** subject-wise, so no subject appears in more than one of train / validation / test.
+- **Split:** subject-disjoint (one recording per subject), stratified by AHI: 694 train / 99 validation / 201 test subjects.
 
 ![dataset](figures/02_dataset.png)
 ![setup](figures/03_experimental_setup.png)
@@ -110,4 +165,4 @@ This work was supported by the National Research Foundation of Korea (NRF), gran
 
 ---
 
-© 2026 the authors. All rights reserved. Code is not included in this repository.
+© 2026 the authors. All rights reserved.
